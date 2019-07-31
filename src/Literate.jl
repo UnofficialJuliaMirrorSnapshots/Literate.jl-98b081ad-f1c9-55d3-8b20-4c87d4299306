@@ -16,6 +16,7 @@ import .Documenter
 # * Lines starting with `#md` are filtered out unless creating a markdown file
 # * Lines starting with `#nb` are filtered out unless creating a notebook
 # * Lines starting with, or ending with, `#jl` are filtered out unless creating a script file
+# * Lines starting with, or ending with, `#src` are filtered out unconditionally
 # * Whitespace within a chunk is preserved
 # * Empty chunks are removed, leading and trailing empty lines in a chunk are also removed
 
@@ -41,10 +42,15 @@ function parse(content; allow_continued = true)
 
     for line in lines
         line = rstrip(line)
-        # print("line = `$line`: ")
         if occursin(r"^\h*#-", line) # new chunk
             # assume same as last chunk, will be cleaned up otherwise
             push!(chunks, typeof(chunks[end])())
+        elseif occursin(r"^\h*#\+", line) # new code chunk, that continues the previous one
+            idx = findlast(x -> isa(x, CodeChunk), chunks)
+            if idx !== nothing
+                chunks[idx].continued = true
+            end
+            push!(chunks, CodeChunk())
         elseif ismdline(line) # markdown
             if !(chunks[end] isa MDChunk)
                 push!(chunks, MDChunk())
@@ -76,19 +82,6 @@ function parse(content; allow_continued = true)
         while isempty(chunk.lines[end]) || isempty(last(chunk.lines[end]))
             pop!(chunk.lines)
         end
-    end
-
-    # find code chunks that are continued
-    last_code_chunk = 0
-    for (i, chunk) in enumerate(chunks)
-        isa(chunk, MDChunk) && continue
-        if startswith(last(chunk.lines)," ")
-            chunk.continued = true
-        end
-        if startswith(first(chunk.lines)," ")
-            chunks[last_code_chunk].continued = true
-        end
-        last_code_chunk = i
     end
 
     # if we don't allow continued code blocks we need to merge MDChunks into the CodeChunks
@@ -131,11 +124,13 @@ function replace_default(content, sym;
     if credit
         if sym === :jl
             content *= """
+
                 #-
                 ## This file was generated using Literate.jl, https://github.com/fredrikekre/Literate.jl
                 """
         else
             content *= """
+
                 #-
                 # *This $(sym === :md ? "page" : "notebook") was generated using [Literate.jl](https://github.com/fredrikekre/Literate.jl).*
                 """
@@ -149,49 +144,77 @@ function replace_default(content, sym;
     push!(repls, r".*#src$\n?"m => "")
 
     if sym === :md
-        push!(repls, r"^#nb.*\n?"m => "") # remove #nb lines
-        push!(repls, r"^#jl.*\n?"m => "") # remove leading #jl lines
-        push!(repls, r"^#md "m => "")     # remove leading #md
+        push!(repls, r"^#md "m => "")      # remove leading #md
+        push!(repls, r"^#!md.*\n?"m => "") # remove leading #!md lines
+        push!(repls, r"^#nb.*\n?"m => "")  # remove #nb lines
+        push!(repls, r"^#!nb "m => "")     # remove leading #!nb
+        push!(repls, r"^#jl.*\n?"m => "")  # remove leading #jl lines
+        push!(repls, r"^#!jl "m => "")     # remove leading #!jl
     elseif sym === :nb
-        push!(repls, r"^#md.*\n?"m => "") # remove #md lines
-        push!(repls, r"^#jl.*\n?"m => "") # remove leading #jl lines
-        push!(repls, r"^#nb "m => "")     # remove leading #nb
+        push!(repls, r"^#md.*\n?"m => "")  # remove #md lines
+        push!(repls, r"^#!md "m => "")     # remove leading #!md
+        push!(repls, r"^#nb "m => "")      # remove leading #nb
+        push!(repls, r"^#!nb.*\n?"m => "") # remove #!nb lines
+        push!(repls, r"^#jl.*\n?"m => "")  # remove leading #jl lines
+        push!(repls, r"^#!jl "m => "")     # remove leading #!jl
         push!(repls, r"```math(.*?)```"s => s"\\begin{equation}\1\\end{equation}")
     else # sym === :jl
-        push!(repls, r"^#md.*\n?"m => "") # remove #md lines
-        push!(repls, r"^#nb.*\n?"m => "") # remove #nb lines
-        push!(repls, r"^#jl "m => "")     # remove leading #jl
+        push!(repls, r"^#md.*\n?"m => "")  # remove #md lines
+        push!(repls, r"^#!md "m => "")     # remove leading #!md
+        push!(repls, r"^#nb.*\n?"m => "")  # remove #nb lines
+        push!(repls, r"^#!nb "m => "")     # remove leading #!nb
+        push!(repls, r"^#jl "m => "")      # remove leading #jl
+        push!(repls, r"^#!jl.*\n?"m => "") # remove #!jl lines
     end
 
     # name
     push!(repls, "@__NAME__" => name)
 
     # fix links
-    travis_repo_slug = get(ENV, "TRAVIS_REPO_SLUG", "TRAVIS_REPO_SLUG")
-    ## use same logic as Documenter to figure out the deploy folder
-    travis_tag = get(ENV, "TRAVIS_TAG", "TRAVIS_TAG")
-    if isempty(travis_tag)
-        folder = "dev"
+    if get(ENV, "DOCUMENTATIONGENERATOR", "") == "true"
+        ## DocumentationGenerator.jl
+        ### URL to the root of the deployment, see
+        ### https://github.com/JuliaDocs/DocumentationGenerator.jl/pull/76
+        base_url = get(ENV, "DOCUMENTATIONGENERATOR_BASE_URL", "DOCUMENTATIONGENERATOR_BASE_URL")
+        ### replace @__REPO_ROOT_URL__ to master/commit
+        # TODO
+        # repo_root_url = "https://github.com/$(travis_repo_slug)/blob/$(commit)"
+        # push!(repls, "@__REPO_ROOT_URL__" => repo_root_url)
+        ### replace @__NBVIEWER_ROOT_URL__ to dev or version directory
+        nbviewer_root_url = "https://nbviewer.jupyter.org/urls/$(base_url)"
+        push!(repls, "@__NBVIEWER_ROOT_URL__" => nbviewer_root_url)
+        ### replace @__BINDER_ROOT_URL__ to dev or version directory
+        ### TODO: Binder requires files to be in a git repository :(
+        if match(r"@__BINDER_ROOT_URL__", content) !== nothing
+            @warn("mybinder.org requires the notebook to be in a git repository, " *
+                  "which does not work with DocumentationGenerator.jl")
+        end
+    elseif get(ENV, "HAS_JOSH_K_SEAL_OF_APPROVAL", "") == "true"
+        ## Travis CI
+        ### Use same logic as Documenter to figure out the deploy folder
+        travis_repo_slug = get(ENV, "TRAVIS_REPO_SLUG", "TRAVIS_REPO_SLUG")
+        travis_tag = get(ENV, "TRAVIS_TAG", "TRAVIS_TAG")
+        ### use the versioned directory for links, even for the stable
+        ### and release folders since these will not change
+        folder = isempty(travis_tag) ? "dev" : travis_tag
+        ### replace @__REPO_ROOT_URL__ to master/commit
+        repo_root_url = "https://github.com/$(travis_repo_slug)/blob/$(commit)"
+        push!(repls, "@__REPO_ROOT_URL__" => repo_root_url)
+        ### replace @__NBVIEWER_ROOT_URL__ to dev or version directory
+        nbviewer_root_url = "https://nbviewer.jupyter.org/github/$(travis_repo_slug)/blob/$(branch)/$(folder)"
+        push!(repls, "@__NBVIEWER_ROOT_URL__" => nbviewer_root_url)
+        ### replace @__BINDER_ROOT_URL__ to dev or version directory
+        binder_root_url = "https://mybinder.org/v2/gh/$(travis_repo_slug)/$(branch)?filepath=$(folder)"
+        push!(repls, "@__BINDER_ROOT_URL__" => binder_root_url)
     else
-        # use the versioned directory for links, even for the stable and release-
-        # folders since this will never change
-        folder = travis_tag
-    end
-
-    ## replace @__REPO_ROOT_URL__ to master/commit
-    repo_root_url = "https://github.com/$(travis_repo_slug)/blob/$(commit)/"
-    push!(repls, "@__REPO_ROOT_URL__" => repo_root_url)
-
-    ## replace @__NBVIEWER_ROOT_URL__ to dev or version directory
-    nbviewer_root_url = "https://nbviewer.jupyter.org/github/$(travis_repo_slug)/blob/$(branch)/$(folder)/"
-    push!(repls, "@__NBVIEWER_ROOT_URL__" => nbviewer_root_url)
-
-    ## replace $__BINDER_ROOT_URL__ to dev or version directory
-    binder_root_url = "https://mybinder.org/v2/gh/$(travis_repo_slug)/$(branch)?filepath=$(folder)/"
-    push!(repls, "@__BINDER_ROOT_URL__" => binder_root_url)
-
-    if get(ENV, "HAS_JOSH_K_SEAL_OF_APPROVAL", "") != "true"
-        @info "not running on Travis, skipping links will not be correct."
+        ## Warn about broken link expansions
+        if (match(r"@__REPO_ROOT_URL__", content)     !== nothing) ||
+           (match(r"@__NBVIEWER_ROOT_URL__", content) !== nothing) ||
+           (match(r"@__BINDER_ROOT_URL__", content)   !== nothing)
+           @warn("expansion of `@__REPO_ROOT_URL__`, `@__REPO_ROOT_URL__` and " *
+                 " `@__REPO_ROOT_URL__` will only be correct if running in " *
+                 "DocumentationGenerator.jl or Travis CI.")
+        end
     end
 
     # run some Documenter specific things
@@ -348,7 +371,7 @@ function markdown(inputfile, outputdir; preprocess = identity, postprocess = ide
         end
         content = """
         # ```@meta
-        # EditURL = "@__REPO_ROOT_URL__$(path)"
+        # EditURL = "@__REPO_ROOT_URL__/$(path)"
         # ```
 
         """ * content
@@ -395,6 +418,19 @@ function markdown(inputfile, outputdir; preprocess = identity, postprocess = ide
 end
 
 const JUPYTER_VERSION = v"4.3.0"
+
+parse_nbmeta(line::Pair) = parse_nbmeta(line.second)
+function parse_nbmeta(line)
+    # Format: %% optional ignored text [type] {optional metadata JSON}
+    # Cf. https://jupytext.readthedocs.io/en/latest/formats.html#the-percent-format
+    m = match(r"^%% ([^[{]+)?\s*(?:\[(\w+)\])?\s*(\{.*)?$", line)
+    typ = m.captures[2]
+    name = m.captures[1] === nothing ? Dict{String, String}() : Dict("name" => m.captures[1])
+    meta = m.captures[3] === nothing ? Dict{String, Any}() : JSON.parse(m.captures[3])
+    return typ, merge(name, meta)
+end
+line_is_nbmeta(line::Pair) = line_is_nbmeta(line.second)
+line_is_nbmeta(line) = startswith(line, "%% ")
 
 """
     Literate.notebook(inputfile, outputdir; kwargs...)
@@ -449,20 +485,24 @@ function notebook(inputfile, outputdir; preprocess = identity, postprocess = ide
     cells = []
     for chunk in chunks
         cell = Dict()
-        if isa(chunk, MDChunk)
-            cell["cell_type"] = "markdown"
-            cell["metadata"] = Dict()
-            lines = String[x.second for x in chunk.lines] # skip indent
-            @views map!(x -> x * '\n', lines[1:end-1], lines[1:end-1])
-            cell["source"] = lines
-            cell["outputs"] = []
-        else # isa(chunk, CodeChunk)
-            cell["cell_type"] = "code"
-            cell["metadata"] = Dict()
-            @views map!(x -> x * '\n', chunk.lines[1:end-1], chunk.lines[1:end-1])
-            cell["source"] = chunk.lines
+        chunktype = isa(chunk, MDChunk) ? "markdown" : "code"
+        if !isempty(chunk.lines) && line_is_nbmeta(chunk.lines[1])
+            metatype, metadata = parse_nbmeta(chunk.lines[1])
+            metatype !== nothing && metatype != chunktype && error("specifying a different cell type is not supported")
+            popfirst!(chunk.lines)
+        else
+            metadata = Dict{String, Any}()
+        end
+        lines = isa(chunk, MDChunk) ?
+                    String[x.second for x in chunk.lines] : # skip indent
+                    chunk.lines
+        @views map!(x -> x * '\n', lines[1:end-1], lines[1:end-1])
+        cell["cell_type"] = chunktype
+        cell["metadata"] = metadata
+        cell["source"] = lines
+        cell["outputs"] = []
+        if chunktype == "code"
             cell["execution_count"] = nothing
-            cell["outputs"] = []
         end
         push!(cells, cell)
     end

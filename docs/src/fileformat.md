@@ -13,7 +13,7 @@ The basic syntax is simple:
 
 Leading whitespace is allowed before `#`, but it will be removed when generating the
 output. Since `#`-lines is treated as markdown we can not use that for regular julia
-comments, for this you can instead use `##`, which will render as `#` in the output.
+comments, for this you can instead use `## `, which will render as `# ` in the output.
 
 Lets look at a simple example:
 ```julia
@@ -22,6 +22,7 @@ Lets look at a simple example:
 # In julia rational numbers can be constructed with the `//` operator.
 # Lets define two rational numbers, `x` and `y`:
 
+## Define variable x and y
 x = 1//3
 y = 2//5
 
@@ -29,7 +30,7 @@ y = 2//5
 
 z = x + y
 ```
-In the lines starting with `#` we can use regular markdown syntax, for example the `#`
+In the lines starting with `# ` we can use regular markdown syntax, for example the `#`
 used for the heading and the backticks for formatting code. The other lines are regular
 julia code. We note a couple of things:
 - The script is valid julia, which means that we can `include` it and the example will run
@@ -39,7 +40,7 @@ julia code. We note a couple of things:
 
 For simple use this is all you need to know. The following additional special syntax can also be used:
 - `#md`, `#nb`, `#jl`, `#src`: tags to filter lines, see [Filtering Lines](@ref Filtering-Lines),
-- `#-`: tag to manually control chunk-splits, see [Custom control over chunk splits](@ref).
+- `#-` (`#+`): tag to manually control chunk-splits, see [Custom control over chunk splits](@ref).
 
 There is also some default convenience replacements that will always be performed, see
 [Default Replacements](@ref).
@@ -57,6 +58,10 @@ certain lines:
 
 Lines *starting* with one of these tokens are filtered out in the
 [preprocessing step](@ref Pre-processing).
+
+!!! tip
+    The tokens can also be negated, for example a line starting with `#!nb` would
+    be included in markdown and script output, but filtered out for notebook output.
 
 Suppose, for example, that we want to include a docstring within a `@docs` block
 using Documenter. Obviously we don't want to include this in the notebook,
@@ -94,17 +99,17 @@ The following convenience "macros" are always expanded:
   [`Literate.notebook`](@ref) and [`Literate.script`](@ref)
   (defaults to the filename of the input file).
 
-- `@__REPO__ROOT_URL__`
+- `@__REPO_ROOT_URL__`
 
-  expands to `https://github.com/$(ENV["TRAVIS_REPO_SLUG"])/blob/master/`
+  expands to `https://github.com/$(ENV["TRAVIS_REPO_SLUG"])/blob/master`
   and is a convenient way to use when you want to link to files outside the
-  doc-build directory. For example `@__REPO__ROOT_URL__src/Literate.jl` would link
+  doc-build directory. For example `@__REPO_ROOT_URL__/src/Literate.jl` would link
   to the source of the Literate module.
 
 - `@__NBVIEWER_ROOT_URL__`
 
   expands to
-  `https://nbviewer.jupyter.org/github/$(ENV["TRAVIS_REPO_SLUG"])/blob/gh-pages/$(folder)/`
+  `https://nbviewer.jupyter.org/github/$(ENV["TRAVIS_REPO_SLUG"])/blob/gh-pages/$(folder)`
   where `folder` is the folder that `Documenter.deploydocs` deploys too.
   This can be used if you want a link that opens the generated notebook in
   [http://nbviewer.jupyter.org/](http://nbviewer.jupyter.org/).
@@ -112,11 +117,17 @@ The following convenience "macros" are always expanded:
 - `@__BINDER_ROOT_URL__`
 
   expands to
-  `https://mybinder.org/v2/gh/$(ENV["TRAVIS_REPO_SLUG"])/$(branch)?filepath=$(folder)/`
+  `https://mybinder.org/v2/gh/$(ENV["TRAVIS_REPO_SLUG"])/$(branch)?filepath=$(folder)`
   where `branch`/`folder` is the branch and folder where `Documenter.deploydocs`
   deploys too. This can be used if you want a link that opens the generated notebook in
   [https://mybinder.org/](https://mybinder.org/).
   To add a binder-badge in e.g. the HTML output you can use:
   ```
-  [![Binder](https://mybinder.org/badge_logo.svg)](@__BINDER_ROOT_URL__path/to/notebook.inpynb)
+  [![Binder](https://mybinder.org/badge_logo.svg)](@__BINDER_ROOT_URL__/path/to/notebook.inpynb)
   ```
+
+!!! note
+    `@__REPO_ROOT_URL__` and `@__NBVIEWER_ROOT_URL__` works for documentation built with
+    [DocumentationGenerator.jl](https://github.com/JuliaDocs/DocumentationGenerator.jl)
+    but `@__BINDER_ROOT_URL__` does not, since `mybinder.org` requires the files
+    to be located inside a git repository.
